@@ -9,6 +9,7 @@ from spn.algorithms.Inference import log_likelihood
 from spn.io.Text import spn_to_str_equation
 from spn.structure.Base import get_nodes_by_type, Leaf, eval_spn_bottom_up, Sum, Product
 from spn.structure.leaves.parametric.Parametric import Gaussian, Bernoulli
+from spn.structure.leaves.histogram.Histograms import Histogram
 import math
 import logging
 
@@ -145,10 +146,19 @@ def mpe_to_cpp(root, c_data_type="double"):
             my_id=node.id, input_map=node.scope[0], completion_val=completion_val
         )
 
+    def mpe_histogram_to_cpp(node, c_data_type="double"):
+        # this is essentially an argmax
+        _, maxIndex = max((v,i) for i,v in enumerate(node.densities))
+
+        return f"if (selected[{node.id}]) {{\n" \
+            f"\tcompletion[{node.scope[0]}] = {maxIndex};\n" \
+            "}"
+
     eval_functions[Product] = mpe_prod_to_cpp
     eval_functions[Sum] = mpe_sum_to_cpp
     eval_functions[Gaussian] = mpe_gaussian_to_cpp
     eval_functions[Bernoulli] = mpe_bernoulli_to_cpp
+    eval_functions[Histogram] = mpe_histogram_to_cpp
 
     all_nodes = get_nodes_by_type(root)
 
@@ -262,10 +272,18 @@ def eval_to_cpp(node, c_data_type="double"):
             vartype=c_data_type, node_id=n.id, scope=n.scope[0], p_true=n.p
         )
 
+    def histogram_eval_to_cpp(n, c_data_type="double"):
+        entry_count = [b - a for a, b in zip(n.breaks, n.breaks[1:])]
+        probabilities = [p / n for n, p in zip(entry_count, n.densities)]
+
+        return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " }; " \
+            f"result_node[{n.id}] = probs_{n.id}[static_cast<int>(x[{n.scope[0]}])];"
+
     eval_functions[Sum] = logsumexp_sum_eval_to_cpp
     eval_functions[Product] = log_prod_eval_to_cpp
     eval_functions[Gaussian] = gaussian_eval_to_cpp
     eval_functions[Bernoulli] = bernoulli_eval_to_cpp
+    eval_functions[Histogram] = histogram_eval_to_cpp
 
     num_nodes = len(get_nodes_by_type(node))
     spn_code = ""
