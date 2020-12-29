@@ -150,7 +150,7 @@ def mpe_to_cpp(root, c_data_type="double"):
         # this is essentially an argmax
         _, maxIndex = max((v,i) for i,v in enumerate(node.densities))
 
-        return f"if (selected[{node.id}]) {{\n" \
+        return f"if (selected[{node.id}] && isnan(completion[{node.scope[0]}])) {{\n" \
             f"\tcompletion[{node.scope[0]}] = {maxIndex};\n" \
             "}"
 
@@ -277,7 +277,7 @@ def eval_to_cpp(node, c_data_type="double"):
         probabilities = [p / n for n, p in zip(entry_count, n.densities)]
 
         return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " }; " \
-            f"result_node[{n.id}] = probs_{n.id}[static_cast<int>(x[{n.scope[0]}])];"
+            f"result_node[{n.id}] = isnan(x[{n.scope[0]}]) ? 0 : probs_{n.id}[static_cast<int>(x[{n.scope[0]}])];"
 
     eval_functions[Sum] = logsumexp_sum_eval_to_cpp
     eval_functions[Product] = log_prod_eval_to_cpp
