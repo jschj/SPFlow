@@ -52,8 +52,8 @@ def get_header(num_inputs, num_nodes, c_data_type="double", header_guard=False):
 
     using namespace std;
 
-    #define SPN_NUM_INPUTS {num_inputs}
-    #define SPN_NUM_NODES {num_nodes}
+    const size_t SPN_NUM_INPUTS = {num_inputs};
+    const size_t SPN_NUM_NODES = {num_nodes};
 
     void spn_mpe(const vector<{c_data_type}>& evidence, 
                  vector<{c_data_type}>& completion);
@@ -274,7 +274,7 @@ def eval_to_cpp(node, c_data_type="double"):
 
     def histogram_eval_to_cpp(n, c_data_type="double"):
         entry_count = [b - a for a, b in zip(n.breaks, n.breaks[1:])]
-        probabilities = [p / n for n, p in zip(entry_count, n.densities)]
+        probabilities = [math.log(p / n) for n, p in zip(entry_count, n.densities)]
 
         return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " }; " \
             f"result_node[{n.id}] = isnan(x[{n.scope[0]}]) ? 0 : probs_{n.id}[static_cast<int>(x[{n.scope[0]}])];"
