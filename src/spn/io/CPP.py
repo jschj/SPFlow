@@ -43,7 +43,7 @@ def histogram_to_cpp(node, leaf_name, vartype):
     return leave_function, leave_init
 
 
-def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t", header_guard=False):
+def get_header(num_inputs, num_nodes, c_data_type="double", input_type="int32_t", header_guard=False):
     spn_signature = f"{c_data_type} spn(const {input_type} *x, {c_data_type} *result_node);"
     spn_cpp_signature = f"{c_data_type} spn(const std::vector<{input_type}>& x, std::vector<{c_data_type}>& result_node);"
     spn_many_signature = f"void spn_many(const {input_type} *data_in, {c_data_type} *data_out, size_t rows);"
@@ -98,7 +98,7 @@ def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t
     return header
 
 
-def mpe_to_cpp(root, c_data_type="double", input_data_type="uint32_t"):
+def mpe_to_cpp(root, c_data_type="double", input_data_type="int32_t"):
     eval_functions = {}
 
     def mpe_prod_to_cpp(node, c_data_type="dobule"):
@@ -158,7 +158,7 @@ def mpe_to_cpp(root, c_data_type="double", input_data_type="uint32_t"):
         # this is essentially an argmax
         _, maxIndex = max((v,i) for i,v in enumerate(node.densities))
 
-        return f"if (selected[{node.id}] && isnan(completion[{node.scope[0]}])) {{\n" \
+        return f"if (selected[{node.id}] && completion[{node.scope[0]}] == -1) {{\n" \
             f"\tcompletion[{node.scope[0]}] = {maxIndex};\n" \
             "}"
 
@@ -341,7 +341,7 @@ def eval_to_cpp(node, c_data_type="double"):
     return function_code
 
 
-def eval_to_cpp_pointer(node, c_data_type="double", input_type="uint32_t"):
+def eval_to_cpp_pointer(node, c_data_type="double", input_type="int32_t"):
     eval_functions = {}
 
     def sum_eval_to_cpp(n, c_data_type="double", **kwargs):
@@ -361,7 +361,7 @@ def eval_to_cpp_pointer(node, c_data_type="double", input_type="uint32_t"):
             vartype=c_data_type, node_id=n.id, operation=operation
         )
 
-    def histogram_eval_to_cpp(n, c_data_type="double", input_type="uint32_t"):
+    def histogram_eval_to_cpp(n, c_data_type="double", input_type="int32_t"):
         entry_count = [int(b - a) for a, b in zip(n.breaks, n.breaks[1:])]
         probabilities = reduce(lambda x, y: x + y, [[p] * n for n, p in zip(entry_count, n.densities)]) + [1]
 
