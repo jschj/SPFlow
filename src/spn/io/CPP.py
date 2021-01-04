@@ -12,6 +12,8 @@ from spn.structure.leaves.parametric.Parametric import Gaussian, Bernoulli
 from spn.structure.leaves.histogram.Histograms import Histogram
 import math
 import logging
+from functools import reduce
+import operator
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,15 @@ def histogram_to_cpp(node, leaf_name, vartype):
     return leave_function, leave_init
 
 
-def get_header(num_inputs, num_nodes, c_data_type="double", header_guard=False):
+def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t", header_guard=False):
+    spn_signature = f"{c_data_type} spn(const {input_type} *x, {c_data_type} *result_node);"
+    spn_cpp_signature = f"{c_data_type} spn(const std::vector<{input_type}>& x, std::vector<{c_data_type}>& result_node);"
+    spn_many_signature = f"void spn_many(const {input_type} *data_in, {c_data_type} *data_out, size_t rows);"
+
+    spn_mpe_signature = f"{c_data_type} spn_mpe(const {input_type} *evidence, {input_type} *completion);"
+    spn_mpe_cpp_signature = f"{c_data_type} spn_mpe(const std::vector<{input_type}>& evidence, std::vector<{c_data_type}>& completion);"
+    #spn_mpe_many_signature = f"void spn_mpe_many(const {input_type} *data_in, {c_data_type} *data_out, size_t rows);"
+
     header = """
     #include <stdlib.h> 
     #include <stdarg.h>
@@ -49,31 +59,26 @@ def get_header(num_inputs, num_nodes, c_data_type="double", header_guard=False):
     #include <vector> 
     // # include <fenv.h>
     #include <cstdio> 
+    #include <cstdint>
 
     using namespace std;
 
-    const size_t SPN_NUM_INPUTS = {num_inputs};
-    const size_t SPN_NUM_NODES = {num_nodes};
+    extern const size_t SPN_NUM_INPUTS = {num_inputs};
+    extern const size_t SPN_NUM_NODES = {num_nodes};
 
-    void spn_mpe(const vector<{c_data_type}>& evidence, 
-                 vector<{c_data_type}>& completion);
+    {spn_signature}
+    {spn_cpp_signature}
+    {spn_many_signature}
 
-    void spn_mpe({c_data_type}* evidence, 
-                 {c_data_type}* completion, 
-                 size_t data_size);
-
-    void spn_mpe_many({c_data_type}* evidence, {c_data_type}* completion, 
-                    size_t data_size, size_t rows);
-
-    {c_data_type} spn(const vector<{c_data_type}>& x, 
-                vector<{c_data_type}>& result_node);
-    
-    {c_data_type} spn({c_data_type}* x, {c_data_type}* result_node);
-
-    void spn_many({c_data_type}* data_in, {c_data_type}* data_out, size_t rows);
-
+    {spn_mpe_signature}
+    {spn_mpe_cpp_signature}
     """.format(
-        c_data_type=c_data_type, num_inputs=num_inputs, num_nodes=num_nodes
+        num_inputs=num_inputs, num_nodes=num_nodes,
+        spn_signature=spn_signature,
+        spn_cpp_signature=spn_cpp_signature,
+        spn_many_signature=spn_many_signature,
+        spn_mpe_signature=spn_mpe_signature,
+        spn_mpe_cpp_signature=spn_mpe_signature
     )
 
     if header_guard:
@@ -359,6 +364,67 @@ def eval_to_cpp(node, c_data_type="double"):
     return function_code
 
 
+def eval_to_cpp_pointer(node, c_data_type="double", input_type="uint32_t"):
+    eval_functions = {}
+
+    def sum_eval_to_cpp(n, c_data_type="double", **kwargs):
+        operations = []
+        for i, c in enumerate(n.children):
+            operations.append(
+                "result_node[{child_id}]*{weight}".format(weight=n.weights[i], child_id=c.id)
+            )        
+        return "result_node[{node_id}] = {operation};".format(
+            node_id=n.id, operation="+".join(operations)
+        )
+
+    def prod_eval_to_cpp(n, c_data_type="double", **kwargs):
+        operation = "*".join(["result_node[" + str(c.id) + "]" for c in n.children])
+
+        return "result_node[{node_id}] = {operation};".format(
+            vartype=c_data_type, node_id=n.id, operation=operation
+        )
+
+    def histogram_eval_to_cpp(n, c_data_type="double", input_type="uint32_t"):
+        entry_count = [int(b - a) for a, b in zip(n.breaks, n.breaks[1:])]
+        probabilities = reduce(lambda x, y: x + y, [[p] * n for n, p in zip(entry_count, n.densities)]) + [1]
+
+        return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " };\n" \
+            f"result_node[{n.id}] = probs_{n.id}[static_cast<{input_type}>(x[{n.scope[0]}])];"
+
+    eval_functions[Sum] = sum_eval_to_cpp
+    eval_functions[Product] = prod_eval_to_cpp
+    eval_functions[Histogram] = histogram_eval_to_cpp
+
+    num_nodes = len(get_nodes_by_type(node))
+    spn_code = ""
+    for n in reversed(get_nodes_by_type(node)):
+        # spn_code += "\t\t"
+        spn_code += eval_functions[type(n)](n, c_data_type=c_data_type, input_type=input_type)
+        spn_code += "\n\t\t"
+
+    # header = get_header(c_data_type=c_data_type)
+
+    function_code = """
+{vartype} spn(const {input_type} *x, {vartype} *result_node){{
+    // feenableexcept(FE_INVALID | FE_OVERFLOW);
+    // 3.0 is just a temporary number. 
+    {spn_code}
+    return result_node[0];
+}}
+
+void spn_many(const {input_type}* data_in, {vartype}* data_out, size_t rows) {{
+    {vartype} result_node[{num_nodes}];
+
+    #pragma omp parallel for
+    for (size_t i = 0; i < rows; ++i)
+        data_out[i] = spn(data_in + i * {num_input}, result_node);
+}}
+    """.format(
+        c_data_type=c_data_type, num_nodes=num_nodes, vartype=c_data_type, spn_code=spn_code, num_input=len(node.scope), input_type=input_type
+    )
+    return function_code
+
+
 def generate_cpp_code(node, c_data_type="double", outfile=None):
 
     num_input = len(node.scope)
@@ -386,8 +452,8 @@ def generate_cpp_code_with_header(node, c_data_type="double", filename="spn"):
     """.format(
         header_file_name=filename + ".h"
     )
-    code += eval_to_cpp(node, c_data_type=c_data_type)
-    code += mpe_to_cpp(node, c_data_type=c_data_type)
+    code += eval_to_cpp_pointer(node, c_data_type=c_data_type)
+    #code += mpe_to_cpp(node, c_data_type=c_data_type)
 
     with open(filename + ".h", "w") as f_header, open(filename + ".cpp", "w") as f_code:
         f_header.write(header)
