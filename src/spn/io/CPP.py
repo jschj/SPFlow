@@ -50,7 +50,7 @@ def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t
 
     spn_mpe_signature = f"{c_data_type} spn_mpe(const {input_type} *evidence, {input_type} *completion);"
     spn_mpe_cpp_signature = f"{c_data_type} spn_mpe(const std::vector<{input_type}>& evidence, std::vector<{c_data_type}>& completion);"
-    #spn_mpe_many_signature = f"void spn_mpe_many(const {input_type} *data_in, {c_data_type} *data_out, size_t rows);"
+    spn_mpe_many_signature = f"void spn_mpe_many(const {input_type} *data_in, {c_data_type} *data_out, size_t rows);"
 
     header = """
     #include <stdlib.h> 
@@ -60,6 +60,7 @@ def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t
     // # include <fenv.h>
     #include <cstdio> 
     #include <cstdint>
+    #include <algorithm>
 
     using namespace std;
 
@@ -72,13 +73,15 @@ def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t
 
     {spn_mpe_signature}
     {spn_mpe_cpp_signature}
+    {spn_mpe_many_signature}
     """.format(
         num_inputs=num_inputs, num_nodes=num_nodes,
         spn_signature=spn_signature,
         spn_cpp_signature=spn_cpp_signature,
         spn_many_signature=spn_many_signature,
         spn_mpe_signature=spn_mpe_signature,
-        spn_mpe_cpp_signature=spn_mpe_signature
+        spn_mpe_cpp_signature=spn_mpe_cpp_signature,
+        spn_mpe_many_signature=spn_mpe_many_signature
     )
 
     if header_guard:
@@ -95,7 +98,7 @@ def get_header(num_inputs, num_nodes, c_data_type="double", input_type="uint32_t
     return header
 
 
-def mpe_to_cpp(root, c_data_type="double"):
+def mpe_to_cpp(root, c_data_type="double", input_data_type="uint32_t"):
     eval_functions = {}
 
     def mpe_prod_to_cpp(node, c_data_type="dobule"):
@@ -180,65 +183,39 @@ def mpe_to_cpp(root, c_data_type="double"):
         top_down_code += "\n\t\t"
 
     function_code = """
-        void spn_mpe(const vector<{c_data_type}>& evidence, 
-                        vector<{c_data_type}>& completion) {{
-            // Copy the evidence to completion. 
-            completion = evidence; 
-            vector<bool> selected( (size_t) {num_nodes}, false);
+        {c_data_type} spn_mpe(const {input_type} *evidence, {input_type} *completion) {{
+            // Copy the evidence to completion.
+            std::copy_n(evidence, {num_inputs}, completion);
+            bool selected[{num_nodes}] = {{ false }};
             selected[0] = true; // Root is always selected.  
 
             // To hold max_llh values for each node 
             // For sum nodes, we take max over children. 
-            // For prod nodes, -INFTY if not selected, llh of itself if selected. 
-            vector<{c_data_type}> max_llh((size_t) {num_nodes}, -INFINITY);
+            // For prod nodes, -INFTY if not selected, llh of itself if selected.
+            {c_data_type} max_llh[{num_nodes}];
+            std::fill_n(max_llh, {num_nodes}, -INFINITY);
 
             // For each node_id (of sum nodes), keep track of winning nodes. 
-            vector<int> winning_nodes((size_t) {num_nodes}, -1);
+            int32_t winning_nodes[{num_nodes}];
 
             // Log likelihood at each node (bottom-up pass)
-            vector<{c_data_type}> ll_result; 
+            {c_data_type} ll_result[{num_nodes}];
             // Do a bottom up pass. 
             {c_data_type} ll = spn(evidence, ll_result); 
             // Top down code
             {top_down_code}
+
+            return ll;
         }}
 
-        void spn_mpe({c_data_type}* evidence, {c_data_type}* completion, size_t data_size)
-        {{
-            vector<double> _evidence(data_size); 
-            vector<double> _completion(data_size); 
-            for (size_t i = 0; i < data_size; i++)
-            {{
-                _evidence[i] = evidence[i]; 
-            }}
-            spn_mpe(_evidence, _completion);
-            for (size_t i = 0; i < data_size; i++)
-            {{
-                completion[i] = _completion[i]; 
-            }}
-        }}
-
-        void spn_mpe_many({c_data_type}* evidence, {c_data_type}* completion, 
-                        size_t data_size, size_t rows){{
+        void spn_mpe_many(const {input_type} *evidence, {input_type} *completion, size_t rows){{
             #pragma omp parallel for
-            for (int i=0; i < rows; ++i){{
-                vector<double> _evidence(data_size); 
-                vector<double> _completion(data_size); 
-                unsigned int r = i * data_size;
-
-                for (size_t j = 0; j < data_size; j++)
-                {{
-                    _evidence[j] = evidence[r + j]; 
-                }}
-                spn_mpe(_evidence, _completion);
-                for (size_t j = 0; j < data_size; j++)
-                {{
-                    completion[r + j] = _completion[j]; 
-                }}
-            }}
+            for (size_t i=0; i < rows; ++i)
+                spn_mpe(evidence + i * {num_inputs}, completion + i * {num_inputs});
         }}        
     """.format(
-        top_down_code=top_down_code, num_nodes=len(all_nodes), c_data_type=c_data_type
+        top_down_code=top_down_code, num_nodes=len(all_nodes), c_data_type=c_data_type, input_type=input_data_type,
+        num_inputs=len(root.scope)
     )
     return function_code
 
@@ -453,7 +430,7 @@ def generate_cpp_code_with_header(node, c_data_type="double", filename="spn"):
         header_file_name=filename + ".h"
     )
     code += eval_to_cpp_pointer(node, c_data_type=c_data_type)
-    #code += mpe_to_cpp(node, c_data_type=c_data_type)
+    code += mpe_to_cpp(node, c_data_type=c_data_type)
 
     with open(filename + ".h", "w") as f_header, open(filename + ".cpp", "w") as f_code:
         f_header.write(header)
