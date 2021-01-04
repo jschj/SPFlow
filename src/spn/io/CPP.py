@@ -121,12 +121,12 @@ def mpe_to_cpp(root, c_data_type="double", input_data_type="int32_t"):
         operation = "if (selected[{my_id}]) {{".format(my_id=n.id)
         for i, c in enumerate(node.children):
             operation += """
-            if ( ll_result[ {child_id} ] + {node_weight:.20}  > max_llh[ {my_id} ] ) {{
+            if ( ll_result[ {child_id} ] * {node_weight}  > max_llh[ {my_id} ] ) {{
                 winning_nodes[ {my_id} ] = {child_id}; 
-                max_llh[ {my_id} ] = ll_result[{child_id}] + {node_weight:.20} ; 
+                max_llh[ {my_id} ] = ll_result[{child_id}] * {node_weight} ; 
             }} 
             """.format(
-                my_id=node.id, child_id=c.id, node_weight=math.log(node.weights[i])
+                my_id=node.id, child_id=c.id, node_weight=node.weights[i]
             )
         operation += """
             selected[winning_nodes[{my_id}]] = true; // now select the node that won. 
@@ -154,12 +154,15 @@ def mpe_to_cpp(root, c_data_type="double", input_data_type="int32_t"):
             my_id=node.id, input_map=node.scope[0], completion_val=completion_val
         )
 
-    def mpe_histogram_to_cpp(node, c_data_type="double"):
+    def mpe_histogram_to_cpp(n, c_data_type="double"):
+        entry_count = [int(b - a) for a, b in zip(n.breaks, n.breaks[1:])]
+        probabilities = reduce(lambda x, y: x + y, [[p] * n for n, p in zip(entry_count, n.densities)])
         # this is essentially an argmax
-        _, maxIndex = max((v,i) for i,v in enumerate(node.densities))
+        max_prob = max(probabilities)
+        maxIndex = probabilities.index(max_prob)
 
-        return f"if (selected[{node.id}] && completion[{node.scope[0]}] == -1) {{\n" \
-            f"\tcompletion[{node.scope[0]}] = {maxIndex};\n" \
+        return f"if (selected[{n.id}] && completion[{n.scope[0]}] == -1) {{\n" \
+            f"\tcompletion[{n.scope[0]}] = {maxIndex};\n" \
             "}"
 
     eval_functions[Product] = mpe_prod_to_cpp
@@ -366,7 +369,7 @@ def eval_to_cpp_pointer(node, c_data_type="double", input_type="int32_t"):
         probabilities = reduce(lambda x, y: x + y, [[p] * n for n, p in zip(entry_count, n.densities)]) + [1]
 
         return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " };\n" \
-            f"result_node[{n.id}] = probs_{n.id}[static_cast<{input_type}>(x[{n.scope[0]}])];"
+            f"result_node[{n.id}] = x[{n.scope[0]}] >= 0 ? probs_{n.id}[static_cast<{input_type}>(x[{n.scope[0]}])] : 1;"
 
     eval_functions[Sum] = sum_eval_to_cpp
     eval_functions[Product] = prod_eval_to_cpp
