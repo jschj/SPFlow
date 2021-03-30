@@ -368,7 +368,7 @@ def eval_to_cpp_pointer(node, c_data_type="double", input_type="int32_t"):
         entry_count = [int(b - a) for a, b in zip(n.breaks, n.breaks[1:])]
         probabilities = reduce(lambda x, y: x + y, [[p] * n for n, p in zip(entry_count, n.densities)]) + [1]
 
-        return f"const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " };\n" \
+        return f"static const {c_data_type} probs_{n.id}[] = {{ " + ", ".join(map(str, probabilities)) + " };\n" \
             f"result_node[{n.id}] = x[{n.scope[0]}] >= 0 ? probs_{n.id}[static_cast<{input_type}>(x[{n.scope[0]}])] : 1;"
 
     eval_functions[Sum] = sum_eval_to_cpp
